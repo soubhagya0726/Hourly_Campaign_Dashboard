@@ -17,7 +17,20 @@ This dashboard helps you analyze how your marketing campaign metrics change **ho
 
 # ---- INPUT FILE ---- #
 excel_url = "https://research.buywclothes.com/Ads_Automation_Reports/Amazon/spend_master.csv"
-uploaded_file = st.file_uploader("Or upload CSV file", type=["csv"])
+uploaded_file = st.file_uploader("Upload Campaign CSV file", type=["csv"])
+
+# ---- AMAZON HOURLY SALE CSV ---- #
+Sales_url="https://research.buywclothes.com/marketing/amazon_sale_hourly.csv"
+amazon_file = st.sidebar.file_uploader("Upload Amazon Hourly Sales CSV", type=["csv"], key="amazon")
+
+amazon_hourly = None  # initialize
+
+if amazon_file:
+    amazon_df = pd.read_csv(amazon_file)
+else:
+    amazon_df= pd.read_csv(Sales_url, parse_dates=['Date'])
+    
+
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file, parse_dates=['timestamp'])
@@ -53,6 +66,17 @@ selected_campaigns = st.sidebar.multiselect("Select Campaigns", sorted(df[campai
 selected_dates = st.sidebar.multiselect("Select Dates", sorted(df['date'].unique()), default=sorted(df['date'].unique()))
 selected_metrics = st.sidebar.multiselect("Select Metrics", available_metrics, default=["Spend"])
 
+
+
+
+
+# Parse columns and clean
+amazon_df['Date'] = pd.to_datetime(amazon_df['Date'], dayfirst=True).dt.date
+amazon_df['Hour'] = pd.to_numeric(amazon_df['Hour'], errors='coerce')
+amazon_df['SP'] = pd.to_numeric(amazon_df['SP'], errors='coerce')
+amazon_hourly = amazon_df.groupby(['Date', 'Hour'])['SP'].sum().reset_index()
+amazon_hourly.rename(columns={'Hour': 'hour_index', 'Date': 'date'}, inplace=True)
+
 # ---- FILTERED DATA ---- #
 df_filtered = df[
     (df[campaign_column].isin(selected_campaigns)) &
@@ -70,17 +94,32 @@ combined_hourly = df_filtered.groupby(['date', 'hour_index'])[selected_metrics].
 combined_hourly['date'] = combined_hourly['date'].astype(str)
 combined_hourly = combined_hourly.sort_values(by=['date', 'hour_index'])
 
+# Merge Amazon hourly SP if uploaded
+if amazon_hourly is not None:
+    amazon_hourly['date'] = amazon_hourly['date'].astype(str)
+    combined_hourly = pd.merge(combined_hourly, amazon_hourly, on=['date', 'hour_index'], how='left')
+
+# Calculate deltas
 for metric in selected_metrics:
     combined_hourly[f"{metric}_delta"] = combined_hourly.groupby('date')[metric].diff()
     combined_hourly[f"{metric}_delta"] = combined_hourly[f"{metric}_delta"].fillna(combined_hourly[metric])
 
-    chart = alt.Chart(combined_hourly).mark_line(point=True).encode(
-        x='hour_index:O',
+    base = alt.Chart(combined_hourly).encode(x='hour_index:O')
+
+    metric_line = base.mark_line(point=True).encode(
         y=alt.Y(f"{metric}_delta:Q", title=f"Hourly Change in {metric}"),
-        color='date:N',
+        color=alt.Color('date:N'),
         tooltip=['date', 'hour_index', f"{metric}_delta"]
-    ).properties(title=f"Hourly Change in {metric} (All Campaigns)", height=300)
-    st.altair_chart(chart, use_container_width=True)
+    )
+
+    if 'SP' in combined_hourly.columns:
+        amazon_bar = base.mark_bar(opacity=0.3).encode(
+            y='SP:Q',
+            tooltip=['date', 'hour_index', 'SP']
+        )
+        st.altair_chart(metric_line + amazon_bar, use_container_width=True)
+    else:
+        st.altair_chart(metric_line, use_container_width=True)
 
 # ---- CAMPAIGN LEVEL ANALYSIS ---- #
 st.subheader("📌 Campaign-Level Metric Changes")
@@ -112,6 +151,17 @@ for metric in selected_metrics:
     )
     st.altair_chart(chart, use_container_width=True)
 
+# ---- AMAZON SALES CHART (Standalone) ---- #
+if amazon_hourly is not None:
+    st.subheader("🛒 Amazon Total Hourly Sales")
+    chart = alt.Chart(amazon_hourly).mark_bar().encode(
+        x='hour_index:O',
+        y='SP:Q',
+        color='date:N',
+        tooltip=['date', 'hour_index', 'SP']
+    ).properties(title="Total Hourly SP from Amazon Data", height=300)
+    st.altair_chart(chart, use_container_width=True)
+
 # ---- SUMMARY TABLES ---- #
 st.subheader("📋 Summary Tables")
 col1, col2 = st.columns(2)
@@ -131,39 +181,6 @@ with col2:
 
     delta_columns = [campaign_column, 'date', 'hour_index'] + [f"{m} Δ" for m in selected_metrics]
     st.dataframe(delta_table[delta_columns])
-
-# ---- BUDGET LEFT GRAPH ---- #
-if 'budget_left' in df_filtered.columns:
-    st.subheader("💰 Budget Left Over Time")
-
-    df_filtered['date'] = df_filtered['date'].astype(str)
-    df_filtered['camp_date'] = df_filtered[campaign_column] + " | " + df_filtered['date']
-
-    chart = (
-        alt.Chart(df_filtered)
-        .mark_line(point=True)
-        .encode(
-            x='hour_index:O',
-            y=alt.Y('budget_left:Q', title='Budget Left'),
-            color=alt.Color('camp_date:N', legend=alt.Legend(title="Campaign | Date")),
-            tooltip=[campaign_column, 'date', 'hour_index', 'budget_left']
-        )
-        .properties(title="Remaining Budget by Campaign & Date", height=300)
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-    st.markdown("**📋 Campaign Budget Summary**")
-    budget_table = (
-        df_filtered
-        .groupby([campaign_column, 'date', 'hour_index'])
-        .agg({
-            'Budget': 'max',
-            'cumulative_spend': 'max',
-            'budget_left': 'min'
-        })
-        .reset_index()
-    )
-    st.dataframe(budget_table)
 
 # ---- METRIC GUIDE ---- #
 st.sidebar.markdown("---")
