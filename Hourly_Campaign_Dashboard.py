@@ -50,7 +50,7 @@ metric_descriptions = {
     "CTR": "Click-through rate: percentage of impressions that got clicks.",
     "Orders": "How many orders were placed.",
     "Sales": "Total revenue generated.",
-    "ACOS": "Ad Cost of Sale (lower is better).",
+    #"ACOS": "Ad Cost of Sale (lower is better).",
     "ROAS": "Return on Ad Spend (higher is better).",
     "CPC": "Average Cost per Click.",
     "NTB orders": "New-to-brand customer orders.",
@@ -99,27 +99,36 @@ if amazon_hourly is not None:
     amazon_hourly['date'] = amazon_hourly['date'].astype(str)
     combined_hourly = pd.merge(combined_hourly, amazon_hourly, on=['date', 'hour_index'], how='left')
 
+
 # Calculate deltas
 for metric in selected_metrics:
     combined_hourly[f"{metric}_delta"] = combined_hourly.groupby('date')[metric].diff()
     combined_hourly[f"{metric}_delta"] = combined_hourly[f"{metric}_delta"].fillna(combined_hourly[metric])
 
-    base = alt.Chart(combined_hourly).encode(x='hour_index:O')
+    base = alt.Chart(combined_hourly).encode(
+        x=alt.X('hour_index:O', title='Hour')
+    )
 
+    # Line chart for hourly delta
     metric_line = base.mark_line(point=True).encode(
-        y=alt.Y(f"{metric}_delta:Q", title=f"Hourly Change in {metric}"),
-        color=alt.Color('date:N'),
+        y=alt.Y(f"{metric}_delta:Q", title=f"Hourly Change in {metric} / SP"),
+        color=alt.Color('date:N', legend=alt.Legend(title="Date")),
         tooltip=['date', 'hour_index', f"{metric}_delta"]
     )
 
-    if 'SP' in combined_hourly.columns:
-        amazon_bar = base.mark_bar(opacity=0.3).encode(
-            y='SP:Q',
-            tooltip=['date', 'hour_index', 'SP']
-        )
-        st.altair_chart(metric_line + amazon_bar, use_container_width=True)
-    else:
-        st.altair_chart(metric_line, use_container_width=True)
+    amazon_bar = base.mark_bar(opacity=0.3).encode(
+        y=alt.Y('SP:Q', stack=None),
+        color=alt.Color('date:N', legend=alt.Legend(title="Date")),
+        tooltip=['date', 'hour_index', 'SP',f"{metric}_delta"]
+    )
+
+
+    # Combine both on single Y-axis
+    chart = alt.layer(amazon_bar, metric_line)
+
+    st.altair_chart(chart, use_container_width=True)
+
+
 
 # ---- CAMPAIGN LEVEL ANALYSIS ---- #
 st.subheader("📌 Campaign-Level Metric Changes")
